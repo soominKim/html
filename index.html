@@ -212,7 +212,7 @@
     overflow: auto;
   }
 
-  #editor {
+  #highlight, #editor {
     width: 100%;
     min-height: 100%;
     padding: 14px;
@@ -220,18 +220,52 @@
     outline: none;
     resize: none;
     background: transparent;
-    color: var(--editor-text);
     line-height: 1.6;
     tab-size: 2;
     white-space: pre;
     overflow-wrap: normal;
     overflow-x: auto;
-    transition: color 0.3s;
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+
+  #highlight {
+    pointer-events: none;
+    z-index: 0;
+    color: var(--editor-text);
+  }
+
+  #editor {
+    z-index: 1;
+    color: transparent;
+    caret-color: var(--editor-text);
   }
 
   #editor::selection {
     background: var(--selection);
   }
+
+  /* Syntax colors */
+  .syn-tag { color: #569cd6; }
+  .syn-attr { color: #9cdcfe; }
+  .syn-attr-val { color: #ce9178; }
+  .syn-comment { color: #6a9955; font-style: italic; }
+  .syn-doctype { color: #808080; }
+  .syn-entity { color: #d7ba7d; }
+  .syn-text { color: #d4d4d4; }
+  .syn-bracket { color: #808080; }
+  .syn-equal { color: #d4d4d4; }
+
+  .dark .syn-tag { color: #7dd3fc; }
+  .dark .syn-attr { color: #a5f3fc; }
+  .dark .syn-attr-val { color: #fbbf24; }
+  .dark .syn-comment { color: #86efac; font-style: italic; }
+  .dark .syn-doctype { color: #94a3b8; }
+  .dark .syn-entity { color: #fcd34d; }
+  .dark .syn-text { color: #e2e8f0; }
+  .dark .syn-bracket { color: #94a3b8; }
+  .dark .syn-equal { color: #e2e8f0; }
 
   /* Divider */
   .divider {
@@ -304,6 +338,7 @@
     <div class="editor-wrapper">
       <div class="line-numbers" id="lineNumbers"></div>
       <div class="editor-container" id="editorContainer">
+        <pre id="highlight" aria-hidden="true"></pre>
         <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
       </div>
     </div>
@@ -321,6 +356,7 @@
 
 <script>
 const editor = document.getElementById('editor');
+const highlight = document.getElementById('highlight');
 const preview = document.getElementById('preview');
 const lineNumbers = document.getElementById('lineNumbers');
 const editorContainer = document.getElementById('editorContainer');
@@ -377,6 +413,7 @@ const defaultCode = `<!DOCTYPE html>
 editor.value = defaultCode;
 setFontSize(fontSize);
 updateLineNumbers();
+updateHighlight();
 runCode();
 
 // Functions
@@ -395,9 +432,145 @@ function setFontSize(size) {
   const family = "'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace";
   editor.style.fontFamily = family;
   editor.style.fontSize = size + 'px';
+  highlight.style.fontFamily = family;
+  highlight.style.fontSize = size + 'px';
   lineNumbers.style.fontFamily = family;
   lineNumbers.style.fontSize = size + 'px';
   fontSizeLabel.textContent = size + 'px';
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function highlightHTML(code) {
+  let result = '';
+  let i = 0;
+  const len = code.length;
+
+  while (i < len) {
+    // HTML comments: <!-- ... -->
+    if (code.startsWith('<!--', i)) {
+      const end = code.indexOf('-->', i + 4);
+      const closeIdx = end === -1 ? len : end + 3;
+      result += '<span class="syn-comment">' + escapeHtml(code.slice(i, closeIdx)) + '</span>';
+      i = closeIdx;
+    }
+    // DOCTYPE
+    else if (code.startsWith('<!', i) && /^<![a-zA-Z]/.test(code.slice(i))) {
+      const end = code.indexOf('>', i);
+      const closeIdx = end === -1 ? len : end + 1;
+      result += '<span class="syn-doctype">' + escapeHtml(code.slice(i, closeIdx)) + '</span>';
+      i = closeIdx;
+    }
+    // HTML tags
+    else if (code[i] === '<' && (code[i + 1] === '/' || /[a-zA-Z]/.test(code[i + 1] || ''))) {
+      result += '<span class="syn-bracket">&lt;</span>';
+      i++;
+      // closing slash
+      if (code[i] === '/') {
+        result += '<span class="syn-bracket">/</span>';
+        i++;
+      }
+      // tag name
+      let tagName = '';
+      while (i < len && /[a-zA-Z0-9\-]/.test(code[i])) {
+        tagName += code[i];
+        i++;
+      }
+      if (tagName) {
+        result += '<span class="syn-tag">' + escapeHtml(tagName) + '</span>';
+      }
+      // attributes and closing
+      while (i < len && code[i] !== '>') {
+        // whitespace
+        if (/\s/.test(code[i])) {
+          result += code[i];
+          i++;
+        }
+        // self-closing slash
+        else if (code[i] === '/' && code[i + 1] === '>') {
+          result += '<span class="syn-bracket">/</span>';
+          i++;
+        }
+        // attribute
+        else {
+          // attr name
+          let attr = '';
+          while (i < len && code[i] !== '=' && code[i] !== '>' && !/\s/.test(code[i]) && code[i] !== '/') {
+            attr += code[i];
+            i++;
+          }
+          if (attr) {
+            result += '<span class="syn-attr">' + escapeHtml(attr) + '</span>';
+          }
+          // = sign
+          if (code[i] === '=') {
+            result += '<span class="syn-equal">=</span>';
+            i++;
+            // attr value
+            if (code[i] === '"' || code[i] === "'") {
+              const quote = code[i];
+              let val = quote;
+              i++;
+              while (i < len && code[i] !== quote) {
+                val += code[i];
+                i++;
+              }
+              if (i < len) { val += code[i]; i++; }
+              result += '<span class="syn-attr-val">' + escapeHtml(val) + '</span>';
+            } else {
+              // unquoted value
+              let val = '';
+              while (i < len && !/[\s>]/.test(code[i])) {
+                val += code[i];
+                i++;
+              }
+              result += '<span class="syn-attr-val">' + escapeHtml(val) + '</span>';
+            }
+          }
+        }
+      }
+      // closing >
+      if (i < len && code[i] === '>') {
+        result += '<span class="syn-bracket">&gt;</span>';
+        i++;
+      }
+    }
+    // HTML entities: &xxx;
+    else if (code[i] === '&') {
+      let entity = '&';
+      let j = i + 1;
+      while (j < len && j - i < 10 && code[j] !== ';' && !/\s/.test(code[j])) {
+        entity += code[j];
+        j++;
+      }
+      if (j < len && code[j] === ';') {
+        entity += ';';
+        j++;
+        result += '<span class="syn-entity">' + escapeHtml(entity) + '</span>';
+        i = j;
+      } else {
+        result += '&amp;';
+        i++;
+      }
+    }
+    // Plain text
+    else {
+      let text = '';
+      while (i < len && code[i] !== '<' && code[i] !== '&') {
+        text += code[i];
+        i++;
+      }
+      result += '<span class="syn-text">' + escapeHtml(text) + '</span>';
+    }
+  }
+
+  return result;
+}
+
+function updateHighlight() {
+  highlight.innerHTML = highlightHTML(editor.value) + '\n';
 }
 
 function toggleTheme() {
@@ -411,6 +584,7 @@ function resetCode() {
   if (confirm('코드를 초기 상태로 되돌릴까요?')) {
     editor.value = defaultCode;
     updateLineNumbers();
+    updateHighlight();
     runCode();
   }
 }
@@ -427,10 +601,13 @@ function updateLineNumbers() {
 // Events
 editor.addEventListener('input', () => {
   updateLineNumbers();
+  updateHighlight();
 });
 
 editor.addEventListener('scroll', () => {
   lineNumbers.style.transform = `translateY(-${editor.scrollTop}px)`;
+  highlight.scrollTop = editor.scrollTop;
+  highlight.scrollLeft = editor.scrollLeft;
 });
 
 editor.addEventListener('keydown', (e) => {
@@ -442,6 +619,7 @@ editor.addEventListener('keydown', (e) => {
     editor.value = editor.value.substring(0, start) + '  ' + editor.value.substring(end);
     editor.selectionStart = editor.selectionEnd = start + 2;
     updateLineNumbers();
+    updateHighlight();
   }
   // Ctrl/Cmd + Enter to run
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
